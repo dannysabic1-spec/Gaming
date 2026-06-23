@@ -271,6 +271,11 @@ async def send_kaladont_word(channel: discord.TextChannel, word: str, suffix: st
 @bot.event
 async def on_ready():
     load_economy()
+    try:
+        synced = await bot.tree.sync()
+        print(f"✅ Slash komande sinhronizovane (obrisane stare): {len(synced)}")
+    except Exception as e:
+        print(f"⚠️  tree.sync greška: {e}")
     print(f"✅ Bot spreman: {bot.user} | Prefix: {PREFIX}")
 
 @bot.event
