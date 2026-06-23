@@ -6,16 +6,21 @@ Pokretanje:
   export DISCORD_BOT_TOKEN=tvoj_token
   python bot.py
 
-Komande (prefix: .):
-  .kaladont          — Pokreni kaladont
-  .kaladont stop     — Zaustavi kaladont
-  .wordle            — Pokreni wordle
-  .toplo             — Pokreni toplo/klanno
-  .quiz              — Nasumično pitanje
-  .slots [iznos]     — Slot mašina
-  .pare              — Provjeri balans
-  .lestvica          — Top 10 igrača
-  .pomoc             — Lista komandi
+Komande (prefix: -):
+  -kaladont          — Pokreni kaladont
+  -kaladont stop     — Zaustavi kaladont
+  -wordle            — Pokreni wordle
+  -toplo             — Pokreni toplo/klanno
+  -quiz              — Nasumično pitanje
+  -slots [iznos]     — Slot mašina
+  -pare              — Provjeri balans
+  -lestvica          — Top 10 igrača
+  -pomoc             — Lista komandi
+
+Slash komande:
+  /set igra kanal    — Postavi kanal za igru (admin)
+  /set prikazi       — Prikaži trenutna podešavanja
+  /set resetuj igra  — Ukloni ograničenje kanala za igru
 """
 
 import os
@@ -31,16 +36,72 @@ from discord.ext import commands
 # Konfiguracija
 # ─────────────────────────────────────────────
 TOKEN = os.environ.get("DISCORD_BOT_TOKEN", "")
-PREFIX = "."
+PREFIX = "-"
 ECONOMY_FILE = Path("economy.json")
+CHANNEL_CONFIG_FILE = Path("channel_config.json")
 STARTING_BALANCE = 1000
 EMBED_COLOR = 0x000000  # crna crtica
+
+GAME_NAMES = {
+    "kaladont": "Kaladont",
+    "wordle":   "Wordle",
+    "toplo":    "Toplo/Klanno",
+    "quiz":     "Kviz",
+    "slots":    "Slots",
+    "sve":      "Sve igre",
+}
 
 intents = discord.Intents.default()
 intents.message_content = True
 intents.guilds = True
 
 bot = commands.Bot(command_prefix=PREFIX, intents=intents, help_command=None)
+
+# ─────────────────────────────────────────────
+# Konfiguracija kanala po igri
+# ─────────────────────────────────────────────
+# Struktura: { "guild_id": { "igra": [channel_id, ...] } }
+_channel_config: dict[str, dict[str, list[int]]] = {}
+
+def load_channel_config() -> None:
+    global _channel_config
+    if CHANNEL_CONFIG_FILE.exists():
+        _channel_config = json.loads(CHANNEL_CONFIG_FILE.read_text())
+
+def save_channel_config() -> None:
+    CHANNEL_CONFIG_FILE.write_text(json.dumps(_channel_config, indent=2))
+
+def get_allowed_channels(guild_id: int, game: str) -> list[int]:
+    g = str(guild_id)
+    return _channel_config.get(g, {}).get(game, [])
+
+def is_channel_allowed(guild_id: int, channel_id: int, game: str) -> bool:
+    allowed = get_allowed_channels(guild_id, game)
+    if not allowed:
+        return True  # nema ograničenja → sve ok
+    return channel_id in allowed
+
+def add_channel_to_game(guild_id: int, channel_id: int, game: str) -> None:
+    g = str(guild_id)
+    _channel_config.setdefault(g, {}).setdefault(game, [])
+    if channel_id not in _channel_config[g][game]:
+        _channel_config[g][game].append(channel_id)
+    save_channel_config()
+
+def remove_channel_from_game(guild_id: int, channel_id: int, game: str) -> bool:
+    g = str(guild_id)
+    channels = _channel_config.get(g, {}).get(game, [])
+    if channel_id in channels:
+        channels.remove(channel_id)
+        save_channel_config()
+        return True
+    return False
+
+def reset_game_channels(guild_id: int, game: str) -> None:
+    g = str(guild_id)
+    if g in _channel_config and game in _channel_config[g]:
+        del _channel_config[g][game]
+        save_channel_config()
 
 # ─────────────────────────────────────────────
 # Ekonomija
@@ -84,40 +145,202 @@ def top_balances(limit: int = 10) -> list[tuple[str, int]]:
 # Lista srpskih reči (kaladont)
 # ─────────────────────────────────────────────
 SERBIAN_WORDS = [
+    # A
     "automobil","avion","autobus","arhitektura","ananas","atom","armija",
+    "alatka","album","aleksa","aleja","alfabet","algebra","algoritam",
+    "aluminij","ambasada","ambulanta","amerikan","amisija","amfora",
+    "anketa","antena","aparat","apartman","aplauz","april","april",
+    "aranzan","arhiva","arkan","arsenal","arterija","asistent","atmosfera",
+    "auditorij","autoput","avlija","azot",
+    # B
     "brod","banka","biblioteka","bicikl","burza","bomba","barut","boja",
+    "bazen","balkon","balet","balon","banana","barbar","barka","barmen",
+    "baron","bata","batina","bataljon","baterija","beba","bedem","bednja",
+    "behar","belo","beton","biber","biljar","bioskop","biskvit","biser",
+    "blato","bled","blok","boca","bodljika","bojler","bokal","bokor",
+    "bolnica","bonton","borba","borov","bostan","brada","branilac",
+    "brana","brat","brdo","briga","brod","bujica","bukvar","bunar",
+    "bunda","bureg","but","buvar",
+    # C
     "crkva","cvet","cigareta","cipela","centar","crta","cena",
+    "caklja","carina","cediljka","celina","cement","cerada","cestar",
+    "cigla","cimer","cinija","cirkus","cisterna","citara","civara",
+    "cobani","cokoladna","cola","cvicek","cvrcak",
+    # Č
+    "cas","camac","celik","cep","cizme","cobani","cokorep",
+    "canac","carda","carapa","carija","casopis","castan","cekic",
+    "celo","cengen","cetka","cinija","cizma","cizmar",
+    # D
     "drvo","dvorac","dim","dijamant","duga","drug","duvan",
+    "daska","delfin","depo","dernek","dete","dijeta","diploma",
+    "direktor","disk","divan","dizalo","djak","dlan","dlaka",
+    "dodir","dolina","dom","domacin","donja","dorucak","doza",
+    "drama","dresura","drum","drzava","dubina","dukat","duplja",
+    # E
     "elektricitet","ekonomija","ekran","energija","era","epoha",
+    "element","emisija","esej","etaza","evident",
+    # F
     "fabrika","film","fudbal","formula","fenjer","filozofija","fizika",
+    "fakultet","farma","fasada","faza","fenomen","festival","figura",
+    "fioka","fitnes","fjord","flaster","flauta","flota","fond",
+    "fontana","fosfat","fotografija","frizura","frula",
+    # G
     "grad","gora","grob","guma","glas","gladijator","galaksija","gitara",
+    "ganac","garaza","garnitura","gater","gavran","geograf","gips",
+    "gladak","glava","glazba","glina","globus","gnezdo","gobar",
+    "gomila","gorivo","gost","gozba","gracija","grana","granata",
+    "granica","grb","greda","grlo","groblje","gruda","grudi","gruja",
+    "gusle","gvozdje",
+    # H
     "hrana","hotel","harmonika","heroj","hemija","historija","horizont",
+    "hambar","hangar","harfa","hektar","helikopter","hladnjak",
+    "hleb","hodnik","hram","hrast","hrtina","hvala",
+    # I
     "igra","internet","injekcija","instrument","ideal",
+    "ikona","iluzija","imovina","indeks","industrija","inflacija",
+    "instalacija","interes","investicija","iskustvo","izlaz","izlog",
+    "izmak","izvor",
+    # J
     "jabuka","jezik","jaje","junak","jutro","jedrilica",
+    "javor","jedrenje","jela","jelen","jelka","jesen","jezero",
+    "jorgovan","juha","jurnjava",
+    # K
     "kuca","knjiga","kola","kamen","klima","krevet","kupatilo",
+    "kanal","kapija","kapsula","karate","karton","kasarna","kaskada",
+    "katedrala","katun","kazaliste","kazna","kelner","kemija","keramika",
+    "klan","klaonica","klesar","klinika","klizaliste","klupa","kobac",
+    "kobra","kockanje","kofer","kola","kolega","kolobara","koloseum",
+    "komada","komanda","komet","kompjuter","konac","konj","koplje",
+    "korak","korito","korpa","kostur","kota","kotao","kovanica",
+    "kovano","koverta","kozmos","kracun","krajina","krastavac","krava",
+    "krema","krivina","krizaljka","krosna","krst","kruna","kuca",
+    "kuhinja","kultura","kupola","kurs","kutak",
+    # L
     "lav","lopta","led","luka","lepeza","letilica","laboratorija",
+    "labud","lanac","latica","lavina","lazanja","lekar","lekarna",
+    "lepota","letrak","lipa","lista","livada","lobanja","loncic",
+    "lopata","lorber","lotus","lukavost","luna","lutka",
+    # M
     "more","muzika","motor","mapa","medal","mama","majmun","metak",
+    "magnet","mahovina","malter","mast","mecava","medved","megdan",
+    "menija","metak","milje","ministar","miris","misija","mleko",
+    "most","motika","mucanje","murva",
+    # N
     "nebo","noga","nafta","novac","noz","nauka","naziv",
+    "nadnica","napad","napredak","narod","nasip","nastava","natura",
+    "navika","nocas","nocnik","nozic","nula","nusprodukt",
+    # O
     "ocean","olovka","okean","oganj","opera","oblak",
+    "odbojka","odelo","oluja","optika","okus",
+    "obala","oblik","obrazac","obraz","oblast","obveza","ocas",
+    "odaja","odaziv","okret","okrug","olako","olovo","omiljena",
+    "opeka","orao","ormar","osnova","ostava","ostrvo","otisak",
+    "otpad","otrov","ovca","oznaka",
+    # P
     "pesma","park","planina","ptica","pile","planeta","pekar","pozoriste",
+    "palata","papagaj","parfem","pasta","patka","reakcija",
+    "papir","parabola","parcela","pas","pasulj","patos","patrik",
+    "pazar","pecivo","pegla","pehar","penal","pesnik","peta",
+    "pijesak","piknik","pirat","pisac","pismo","pitanje","pizza",
+    "plafon","plamen","plasticna","ples","plitvice","plovak",
+    "polje","poluga","ponos","popravljac","porta","posada","posjed",
+    "posto","potok","povez","pravda","predio","priča","primjer",
+    "pristajaliste","proba","prolaz","prolog","prometej","prsten",
+    "pukovnik","punjenje","pusta","put","puzavac",
+    # R
     "reka","raketa","robot","radio","rudar","riba","rana",
+    "racun","radnja","raketni","rampa","ranac","ratnik","ravnica",
+    "recept","republika","ritam","ronjenje","rucak","rujan","rulman",
+    "rupa","rvanje",
+    # S
     "sport","skola","sunce","svemir","slika","srebro","staklo",
+    "sablja","sajam","saksija","satelit","savez","sabor","sacma",
+    "sahat","sakupljac","salon","samaritan","sandale","sarma","sat",
+    "sava","sedlo","seizmograf","sekira","semafor","senka","sezona",
+    "sinagoga","sirup","sistem","skloniste","sklop","skuter","slagalica",
+    "slama","slam","slap","slast","slatkis","slavan","slavuj","slovo",
+    "sluz","snaga","sneg","sofra","sokak","sokolovi","solar","solin",
+    "solista","sonar","sopstvo","spavaca","specijalist","spiral",
+    "sprema","srpanj","stadion","stanica","stena","stit","stol",
+    "stomak","struja","stubovi","staza","sudar","sudnica","sukob",
+    "sultan","suma","sundjeria","super","suton","svecana","svinja",
+    "svitac","svoboda",
+    # Š
+    "samar","sansa","sator","sekira","sema","sidro","sijeno","sikter",
+    "siljezija","sinska","sipar","sipka","siroka","skola","sljuka",
+    "sljunak","smigla","spilja",
+    # T
     "trava","tabla","toranj","tramvaj","tenk","tenis","tiganj","terminal",
+    "talas","tamnica","tehnologija","teleskop","taktika","talac",
+    "tambura","tapeta","tapir","taraba","tarifa","tasner","tatami",
+    "tegljac","tema","temelj","tepih","terminal","testam","tijesto",
+    "tim","tinta","torba","totem","trabant","tradicija","trampa",
+    "tranzit","trasa","trofej","trup","tucija","tunel","turbo","tur",
+    # U
     "ulica","umetnost","ulje","utakmica","ukus","uragan",
+    "ubojstvo","ucenik","uciliste","ugalj","ugao","ugijen","uhoda",
+    "ukop","ulje","uloga","umivaonik","umorstvo","unakrst","upad",
+    "uprava","urada","urna","usluga","uspon","usta","uteg","utor",
+    # V
     "voda","vatrogasac","voz","vazduh","vila","vojnik","vatra","volkan",
+    "vajar","valuta","vampir","varijanta","velodrom",
+    "valcanje","vanbracni","vanbrod","vanred","varnice","varos",
+    "vaterpolo","vecera","vetar","vikend","vino","violine","virtuelnost",
+    "vizija","vlada","vladavina","vlak","volan","vrata","vrba","vrh",
+    "vrtlog","vuk","vunen",
+    # Z
     "zemlja","zivot","zvuk","zvezda","zdravlje","zmija","zrno",
-    "beton","blato","cesta","daska","delfin","element","emisija","esej",
-    "fenomen","festival","figura","geograf","globus","gorivo",
-    "havaji","himalaji","hrvatska","ikona","iluzija","imovina","iran",
-    "jabuka","jedro","jelen","kapija","kapsula","karate","karton",
-    "labuda","lampa","lansiranje","lavina","magnet","mahovina","malter",
-    "navigacija","okus","odbojka","odelo","oluja","optika",
-    "palata","papagaj","parfem","pasta","patka","reakcija","recept",
-    "republika","ritam","sablja","sajam","saksija","satelit","savez",
-    "talas","tamnica","taxa","tehnologija","teleskop","udar","ukras",
-    "vajar","valuta","vampir","varijanta","velodrom","zavet","zenith",
-    "zlatara","zoologija","zrno","atlas","bakar","biser","celik",
-    "dijamant","elektron","fosfor","gvozdje","helij","jodin","kalcij",
+    "zakon","zaloga","zamak","zanat","zapovjednik","zasada","zavet",
+    "zbirka","zemlja","zenith","zglob","zlatara","zlatnik","zoologija",
+    "zrno","zubac","zurba","zvanicnik","zvezda","zvirjak","zvono",
+    # Ž
+    "zaba","zar","zelja","zena","zerjavica","zica","zigica","zila",
+    "zirafa","zito","zlica","zlijeb","zmajevit","znacka","zvakaci",
+    # Dodatne reči
+    "akcija","aktivnost","akademija","akrobat","akumulator","alarm",
+    "balada","bambusa","bandana","barikada","bastion","batalja",
+    "cigla","cimet","cinober","cipal","cista",
+    "dalekovod","damar","darovit","debata","demon","denar",
+    "fabular","faceta","fanfara","fantazija","farmerica","fascinacija",
+    "galop","gamepad","garderoba","gavrilovic","glacijal","gladiola",
+    "habitat","haljina","hamlet","heraldika","hijena","hipodrom",
+    "iguana","ikebana","ilustracija","imenik","imperija","impuls",
+    "jagoda","jalija","jamb","jantar","jastuci","jastreb","jazbina",
+    "kabina","kaktus","kalem","kalibar","kampanja","kamuflaža",
+    "kapetan","karavan","karizma","kazino","kibla","kimono","kiosk",
+    "laboja","lacman","laguna","laktat","laminat","lancun","lantana",
+    "magaza","maketa","malina","malta","mango","manija","mapa",
+    "naslagano","necklace","negacija","nektar","neonski","neptun",
+    "odlikovanje","oglas","ograda","oklopnik","olimpijada","omot",
+    "padobran","palisada","paluba","pamuk","panceta","panda","paradoks",
+    "rabota","racunalo","rafineria","rajcica","rakun","ramadan",
+    "sabotaza","sagan","sakura","salata","samovar","sanduk","sangria",
+    "tabor","taktika","tamjan","tango","tapija","taranta","tarlatan",
+    "udarna","ugarnica","ugrizati","uhapsiti","ujak","ukidanje","ulazak",
+    "vagon","vajarstvo","vakuum","valcer","valenki","valija","vanbrod",
+    "zanimanje","zastor","zavesa","zavitak","zeljeznica","zemnik",
+    # Dodatne do 1000+
+    "abeceda","adresa","agencija","agentura","aglomerat","agrar","agresija",
+    "barikada","barut","baština","bataljon","bataljun","becikl","begunac",
+    "cedulja","celik","ceremonia","cifra","cimer","cinjenica","cipkar",
+    "darivanje","daska","datulja","debljina","deklaracija","delegat",
+    "egzamen","ekipa","ekspedicija","eksplozija","ekspres","ekstrem",
+    "fenjercic","filijala","fjordovi","flamingo","fotelja","fragola",
+    "garson","gavrilka","geometrija","geranija","gerlica","gimastika",
+    "haiku","halva","haramba","hardver","havana","hazard","hibrid",
+    "jablan","jadran","jagnjece","jamica","januarno","jaruga","jasika",
+    "kadenca","kalkulator","kalup","kamata","kamilica","kandza","kaplar",
+    "labela","lacuga","laganum","lajbek","lakmus","laktoza","lamela",
+    "mačka","maglica","magnet","majstor","maler","mamuza","mandat",
+    "nabavka","nacrt","nadzornik","nakit","nalog","namaz","namjera",
+    "obaveza","obavijest","obedovanje","objasniti","obnoviti","obramba",
+    "padobran","palinka","pamflet","pancir","pandur","panika","paradajz",
+    "rabina","radilica","radionica","ragbi","raketoplav","rakija","raspon",
+    "sabac","sadroj","safran","sagrada","sakupljanje","salama","salveta",
+    "tabulator","takmicar","talog","tamburica","tapkanje","tarifa","tavan",
+    "ubrzanje","ugriz","ulaznica","umiranje","umivanje","unitazija","uprava",
+    "vapcenje","varivo","vaterpolo","vedrina","ventilacija","veresija",
+    "zadruga","zaliv","zamjenik","zapaljenje","zaposlen","zarada","zaraza",
 ]
 
 def normalize(word: str) -> str:
@@ -268,12 +491,100 @@ async def send_kaladont_word(channel: discord.TextChannel, word: str, suffix: st
 # ─────────────────────────────────────────────
 # Slash/prefix komande
 # ─────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# /set slash komanda
+# ─────────────────────────────────────────────
+set_group = discord.app_commands.Group(name="set", description="Podesi kanale za igre (samo admini)")
+
+@set_group.command(name="kanal", description="Dodaj kanal za određenu igru")
+@discord.app_commands.describe(
+    igra="Ime igre (kaladont/wordle/toplo/quiz/slots/sve)",
+    kanal="Kanal koji dozvoljavaš za igru"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def set_kanal(interaction: discord.Interaction, igra: str, kanal: discord.TextChannel):
+    igra = igra.lower()
+    if igra not in GAME_NAMES:
+        await interaction.response.send_message(
+            f"❌ Nepoznata igra: **{igra}**\nDostupne: `kaladont`, `wordle`, `toplo`, `quiz`, `slots`, `sve`",
+            ephemeral=True
+        )
+        return
+    if igra == "sve":
+        for g in ["kaladont","wordle","toplo","quiz","slots"]:
+            add_channel_to_game(interaction.guild_id, kanal.id, g)
+        e = embed("✅ Kanali postavljeni", f"Sve igre su dodijeljene kanalu {kanal.mention}", "Sve igre se sada mogu igrati samo tamo")
+    else:
+        add_channel_to_game(interaction.guild_id, kanal.id, igra)
+        e = embed("✅ Kanal postavljen", f"**{GAME_NAMES[igra]}** se sada može igrati u {kanal.mention}", f"Koristi /set prikazi da vidiš sve kanale")
+    await interaction.response.send_message(embed=e)
+
+@set_group.command(name="ukloni", description="Ukloni kanal iz igre")
+@discord.app_commands.describe(
+    igra="Ime igre",
+    kanal="Kanal koji uklanjаš"
+)
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def set_ukloni(interaction: discord.Interaction, igra: str, kanal: discord.TextChannel):
+    igra = igra.lower()
+    if igra not in GAME_NAMES:
+        await interaction.response.send_message(f"❌ Nepoznata igra: **{igra}**", ephemeral=True)
+        return
+    ok = remove_channel_from_game(interaction.guild_id, kanal.id, igra)
+    if ok:
+        e = embed("✅ Kanal uklonjen", f"{kanal.mention} više nije dozvoljen za **{GAME_NAMES[igra]}**")
+    else:
+        e = embed("❌ Nije pronađeno", f"{kanal.mention} nije bio u listi za **{GAME_NAMES[igra]}**")
+    await interaction.response.send_message(embed=e)
+
+@set_group.command(name="resetuj", description="Ukloni sva ograničenja kanala za igru (igra dostupna svuda)")
+@discord.app_commands.describe(igra="Ime igre (ili 'sve' za reset svega)")
+@discord.app_commands.checks.has_permissions(administrator=True)
+async def set_resetuj(interaction: discord.Interaction, igra: str):
+    igra = igra.lower()
+    if igra == "sve":
+        for g in ["kaladont","wordle","toplo","quiz","slots"]:
+            reset_game_channels(interaction.guild_id, g)
+        e = embed("✅ Reset", "Sva ograničenja kanala su uklonjena.\nSvaka igra se može igrati u bilo kom kanalu.")
+    elif igra in GAME_NAMES:
+        reset_game_channels(interaction.guild_id, igra)
+        e = embed("✅ Reset", f"**{GAME_NAMES[igra]}** se sada može igrati u bilo kom kanalu.")
+    else:
+        await interaction.response.send_message(f"❌ Nepoznata igra: **{igra}**", ephemeral=True)
+        return
+    await interaction.response.send_message(embed=e)
+
+@set_group.command(name="prikazi", description="Prikaži koje igre su dozvoljene u kojim kanalima")
+async def set_prikazi(interaction: discord.Interaction):
+    g = str(interaction.guild_id)
+    config = _channel_config.get(g, {})
+    if not config:
+        await interaction.response.send_message(embed=embed("📋 Podešavanja kanala", "Nema ograničenja — sve igre se mogu igrati u svim kanalima.\n\nKoristi `/set kanal` da dodaš ograničenje."), ephemeral=True)
+        return
+    e = embed("📋 Podešavanja kanala")
+    for game_key, channel_ids in config.items():
+        if not channel_ids:
+            continue
+        channels_str = " ".join(f"<#{cid}>" for cid in channel_ids)
+        e.add_field(name=GAME_NAMES.get(game_key, game_key), value=channels_str, inline=False)
+    if not e.fields:
+        e.description = "Nema ograničenja — sve igre se mogu igrati u svim kanalima."
+    await interaction.response.send_message(embed=e, ephemeral=True)
+
+@set_group.error
+async def set_error(interaction: discord.Interaction, error):
+    if isinstance(error, discord.app_commands.MissingPermissions):
+        await interaction.response.send_message("❌ Nemaš **Administrator** dozvolu za ovu komandu!", ephemeral=True)
+
+bot.tree.add_command(set_group)
+
 @bot.event
 async def on_ready():
     load_economy()
+    load_channel_config()
     try:
         synced = await bot.tree.sync()
-        print(f"✅ Slash komande sinhronizovane (obrisane stare): {len(synced)}")
+        print(f"✅ Slash komande sinhronizovane: {len(synced)}")
     except Exception as e:
         print(f"⚠️  tree.sync greška: {e}")
     print(f"✅ Bot spreman: {bot.user} | Prefix: {PREFIX}")
@@ -305,11 +616,11 @@ async def on_message(message: discord.Message):
                 reward = q["r"]
                 add_balance(user_id, reward)
                 del quiz_sessions[channel_id]
-                e = embed("✅ Tačno!", f"{message.author.mention} je tačno odgovorio/la!\n\nOdgovor: **{correct_text}**\nZarada: {fmt_money(reward)}", "Koristi .quiz za sledeće pitanje")
+                e = embed("✅ Tačno!", f"{message.author.mention} je tačno odgovorio/la!\n\nOdgovor: **{correct_text}**\nZarada: {fmt_money(reward)}", "Koristi -quiz za sledeće pitanje")
                 await message.reply(embed=e)
             else:
                 del quiz_sessions[channel_id]
-                e = embed("❌ Netačno!", f"{message.author.mention} nije pogodio/la.\n\nTačan odgovor: **{correct_text}**", "Koristi .quiz za sledeće pitanje")
+                e = embed("❌ Netačno!", f"{message.author.mention} nije pogodio/la.\n\nTačan odgovor: **{correct_text}**", "Koristi -quiz za sledeće pitanje")
                 await message.reply(embed=e)
             return
 
@@ -344,13 +655,13 @@ async def on_message(message: discord.Message):
                 reward = max(50, 250 - (len(sess["guesses"]) - 1) * 40)
                 add_balance(user_id, reward)
                 del wordle_sessions[channel_id]
-                e = embed("🎉 Tačno!", f"{display}\n\n{message.author.mention} pogodio/la za **{len(sess['guesses'])}** {'pokušaj' if len(sess['guesses'])==1 else 'pokušaja'}!\nNagrada: {fmt_money(reward)}", "Koristi .wordle za novu igru")
+                e = embed("🎉 Tačno!", f"{display}\n\n{message.author.mention} pogodio/la za **{len(sess['guesses'])}** {'pokušaj' if len(sess['guesses'])==1 else 'pokušaja'}!\nNagrada: {fmt_money(reward)}", "Koristi -wordle za novu igru")
                 await message.reply(embed=e)
                 return
 
             if len(sess["guesses"]) >= 6:
                 del wordle_sessions[channel_id]
-                e = embed("💀 Niste pogodili!", f"{display}\n\nReč je bila: **{answer.upper()}**\n\nKoristi **.wordle** za novu igru!", "Srećom sledeći put!")
+                e = embed("💀 Niste pogodili!", f"{display}\n\nReč je bila: **{answer.upper()}**\n\nKoristi **-wordle** za novu igru!", "Srećom sledeći put!")
                 await message.reply(embed=e)
                 return
 
@@ -399,7 +710,7 @@ async def on_message(message: discord.Message):
     if channel_id in kaladont_sessions:
         sess = kaladont_sessions[channel_id]
         word = content
-        if word.startswith(".") or " " in word or not word:
+        if word.startswith("-") or " " in word or not word:
             return
 
         norm = normalize(word)
@@ -433,7 +744,7 @@ async def on_message(message: discord.Message):
             reward = 500
             add_balance(user_id, reward)
             del kaladont_sessions[channel_id]
-            e = embed("🎉 Pobednik!", f"{message.author.mention} je pobedio/la sa rečju **{word.upper()}**!\n\nNagrada: {fmt_money(reward)}", "Kaladont • Koristi .kaladont za novu igru")
+            e = embed("🎉 Pobednik!", f"{message.author.mention} je pobedio/la sa rečju **{word.upper()}**!\n\nNagrada: {fmt_money(reward)}", "Kaladont • Koristi -kaladont za novu igru")
             await message.channel.send(embed=e)
             return
 
@@ -457,6 +768,24 @@ async def on_message(message: discord.Message):
 # ─────────────────────────────────────────────
 # Komande
 # ─────────────────────────────────────────────
+# Helper za provjeru kanala
+# ─────────────────────────────────────────────
+async def check_channel(ctx: commands.Context, game: str) -> bool:
+    if not ctx.guild:
+        return True
+    if is_channel_allowed(ctx.guild.id, ctx.channel.id, game):
+        return True
+    allowed = get_allowed_channels(ctx.guild.id, game)
+    channels_str = " ".join(f"<#{cid}>" for cid in allowed)
+    e = embed(
+        f"❌ Pogrešan kanal",
+        f"**{GAME_NAMES.get(game, game)}** se može igrati samo u:\n{channels_str}",
+        "Admin može promijeniti kanale sa /set kanal"
+    )
+    await ctx.reply(embed=e, delete_after=8)
+    return False
+
+
 @bot.command(name="kaladont", aliases=["k"])
 async def cmd_kaladont(ctx: commands.Context, sub: str = ""):
     cid = ctx.channel.id
@@ -468,7 +797,7 @@ async def cmd_kaladont(ctx: commands.Context, sub: str = ""):
         sess = kaladont_sessions.pop(cid)
         scores = sorted(sess["scores"].items(), key=lambda x: x[1], reverse=True)
         score_str = "\n".join(f"{i+1}. <@{uid}> — **{s}** poena" for i,(uid,s) in enumerate(scores[:5])) or "Niko nije skupio poene."
-        e = embed("🛑 Igra zaustavljena", score_str, "Koristi .kaladont za novu igru")
+        e = embed("🛑 Igra zaustavljena", score_str, "Koristi -kaladont za novu igru")
         await ctx.reply(embed=e)
         return
 
@@ -479,6 +808,9 @@ async def cmd_kaladont(ctx: commands.Context, sub: str = ""):
         sess = kaladont_sessions[cid]
         e = embed(f"**{sess['current'].upper()}**", f"• **Mogućih reči:** {sess['possible']}\n• **Za pobedu:** {sess['to_win']}\n• **Iskorišćeno:** {len(sess['used'])}", f"Napiši reč koja počinje sa {sess['suffix'].upper()}")
         await ctx.reply(embed=e)
+        return
+
+    if not await check_channel(ctx, "kaladont"):
         return
 
     if cid in kaladont_sessions:
@@ -503,6 +835,9 @@ async def cmd_wordle(ctx: commands.Context, sub: str = ""):
             return
         sess = wordle_sessions.pop(cid)
         await ctx.reply(f"Igra zaustavljena. Reč je bila: **{sess['answer'].upper()}**")
+        return
+
+    if not await check_channel(ctx, "wordle"):
         return
 
     if cid in wordle_sessions:
@@ -531,6 +866,9 @@ async def cmd_toplo(ctx: commands.Context, sub: str = ""):
         await ctx.reply(f"Igra zaustavljena. Broj je bio: **{sess['answer']}**")
         return
 
+    if not await check_channel(ctx, "toplo"):
+        return
+
     if cid in toplo_sessions:
         await ctx.reply("❌ Toplo/Klanno već teče! Pogodite broj od 1 do 100.")
         return
@@ -550,6 +888,9 @@ async def cmd_toplo(ctx: commands.Context, sub: str = ""):
 async def cmd_quiz(ctx: commands.Context):
     cid = ctx.channel.id
 
+    if not await check_channel(ctx, "quiz"):
+        return
+
     if cid in quiz_sessions:
         await ctx.reply("❌ Kviz već teče! Odgovorite sa A, B, C ili D.")
         return
@@ -561,13 +902,13 @@ async def cmd_quiz(ctx: commands.Context):
 
     quiz_sessions[cid] = {"question": q}
     opts = "\n".join(f"**{l}.** {o}" for l, o in zip("ABCD", q["opts"]))
-    e = embed(f"❓ Kviz — {q['cat']}", f"**{q['q']}**\n\n{opts}\n\n💰 Nagrada: {fmt_money(q['r'])}", f"Odgovorite sa A, B, C ili D • 30s")
+    e = embed(f"❓ Kviz — {q['cat']}", f"**{q['q']}**\n\n{opts}\n\n💰 Nagrada: {fmt_money(q['r'])}", "Odgovorite sa A, B, C ili D • 30s")
 
     async def timeout():
         await asyncio.sleep(30)
         if cid in quiz_sessions and quiz_sessions[cid]["question"] is q:
             del quiz_sessions[cid]
-            e2 = embed("⏰ Vreme isteklo!", f"Tačan odgovor: **{q['opts'][q['a']]}**", "Koristi .quiz za novo pitanje")
+            e2 = embed("⏰ Vreme isteklo!", f"Tačan odgovor: **{q['opts'][q['a']]}**", "Koristi -quiz za novo pitanje")
             await ctx.channel.send(embed=e2)
 
     asyncio.create_task(timeout())
@@ -578,6 +919,9 @@ SLOT_SYMBOLS = ["🍒","🍋","🍊","🍇","⭐","7️⃣","💎"]
 
 @bot.command(name="slots", aliases=["slot","aparat"])
 async def cmd_slots(ctx: commands.Context, amount: str = "100"):
+    if not await check_channel(ctx, "slots"):
+        return
+
     user_id = str(ctx.author.id)
     balance = get_balance(user_id)
 
@@ -587,7 +931,7 @@ async def cmd_slots(ctx: commands.Context, amount: str = "100"):
         try:
             bet = int(amount)
         except ValueError:
-            await ctx.reply("❌ Nevalidan iznos! Npr: `.slots 500`")
+            await ctx.reply("❌ Nevalidan iznos! Npr: `-slots 500`")
             return
 
     if bet <= 0:
@@ -630,7 +974,7 @@ async def cmd_slots(ctx: commands.Context, amount: str = "100"):
 @bot.command(name="pare", aliases=["novcanik","balans","balance"])
 async def cmd_pare(ctx: commands.Context):
     bal = get_balance(str(ctx.author.id))
-    e = embed(f"💰 Novčanik — {ctx.author.display_name}", f"Vaš trenutni balans:\n\n# {fmt_money(bal)}", "Zaradite više sa .quiz .slots .kaladont .wordle")
+    e = embed(f"💰 Novčanik — {ctx.author.display_name}", f"Vaš trenutni balans:\n\n# {fmt_money(bal)}", "Zaradite više sa -quiz -slots -kaladont -wordle")
     e.set_thumbnail(url=ctx.author.display_avatar.url)
     await ctx.reply(embed=e)
 
@@ -651,20 +995,26 @@ async def cmd_lestvica(ctx: commands.Context):
 async def cmd_pomoc(ctx: commands.Context):
     e = embed("📖 Kefalo Bot — Sve komande")
     e.add_field(name="🎮 Igre", value=(
-        "`.kaladont` — Kaladont (lančanje reči)\n"
-        "`.kaladont stop` — Zaustavi\n"
-        "`.wordle` — Pogodi reč od 5 slova\n"
-        "`.toplo` — Pogodi broj 1-100\n"
-        "`.quiz` — Kviz pitanje"
+        "`-kaladont` — Kaladont (lančanje reči)\n"
+        "`-kaladont stop` — Zaustavi\n"
+        "`-wordle` — Pogodi reč od 5 slova\n"
+        "`-toplo` — Pogodi broj 1-100\n"
+        "`-quiz` — Kviz pitanje"
     ), inline=False)
     e.add_field(name="🎰 Kockanje", value=(
-        "`.slots` — Slot mašina (ulog 100 💵)\n"
-        "`.slots [iznos]` — Vlastiti ulog\n"
-        "`.slots sve` — All-in!"
+        "`-slots` — Slot mašina (ulog 100 💵)\n"
+        "`-slots [iznos]` — Vlastiti ulog\n"
+        "`-slots sve` — All-in!"
     ), inline=False)
     e.add_field(name="💰 Ekonomija", value=(
-        "`.pare` / `.novcanik` — Provjeri balans\n"
-        "`.lestvica` — Top 10 igrača"
+        "`-pare` / `-novcanik` — Provjeri balans\n"
+        "`-lestvica` — Top 10 igrača"
+    ), inline=False)
+    e.add_field(name="⚙️ Admin", value=(
+        "`/set kanal` — Postavi kanal za igru\n"
+        "`/set ukloni` — Ukloni kanal iz igre\n"
+        "`/set resetuj` — Ukloni sva ograničenja\n"
+        "`/set prikazi` — Prikaži podešavanja"
     ), inline=False)
     e.add_field(name="💡 Nagrade", value=(
         "Kaladont pobeda = **500 💵**\n"
